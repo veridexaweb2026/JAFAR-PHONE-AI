@@ -115,21 +115,19 @@ async function loadSchedule() {
     `jafar_schedule?active=eq.true&ends_at=gte.${encodeURIComponent(now)}&select=id,title,details,starts_at,ends_at,share_with_callers&order=starts_at.asc&limit=20`
   );
 
-  return rows
-    .map((row) => {
-      if (row.share_with_callers) {
-        return `[مسموح بالمشاركة]
+  return rows.map((row) => {
+    if (row.share_with_callers) {
+      return `[مسموح بالمشاركة]
 العنوان: ${row.title}
 التفاصيل: ${row.details || ""}
 البداية: ${row.starts_at}
 النهاية: ${row.ends_at || ""}`;
-      }
+    }
 
-      return `[خاص - لا تكشفي التفاصيل]
+    return `[خاص - لا تكشفي التفاصيل]
 جعفر لديه ارتباط من ${row.starts_at} إلى ${row.ends_at || "وقت غير محدد"}.
 إذا سأل المتصل عن هذا الوقت، قولي فقط إن جعفر لديه ارتباط في ذلك الوقت.`;
-    })
-    .join("\n\n");
+  }).join("\n\n");
 }
 
 app.get("/", async () => ({
@@ -267,10 +265,20 @@ app.delete("/admin/schedule/:id", async (request, reply) => {
     : reply.code(500).send({ error: "Delete failed" });
 });
 
+/* CALL LOG */
+
+app.get("/admin/calls", async () => {
+  return await supabaseGet(
+    "jafar_calls?select=id,caller_number,caller_name,reason,message,summary,called_at&order=called_at.desc&limit=100"
+  );
+});
+
 /* PHONE */
 
 app.post("/incoming-call", async (request, reply) => {
   console.log("INCOMING CALL RECEIVED");
+
+  const callerNumber = request.body?.From || "Unknown";
 
   return reply
     .code(200)
@@ -278,7 +286,9 @@ app.post("/incoming-call", async (request, reply) => {
     .send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream" />
+    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream">
+      <Parameter name="callerNumber" value="${callerNumber}" />
+    </Stream>
   </Connect>
 </Response>`);
 });
@@ -288,6 +298,8 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
   let streamSid = null;
   let greetingSent = false;
+  let callerNumber = "Unknown";
+  let callSaved = false;
 
   const openai = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-realtime",
@@ -316,14 +328,24 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
         instructions: `أنتِ مساعدة جعفر الهاتفية.
 
-بعد التحية انتظري المتصل حتى ينتهي من كلامه.
+ابدئي المكالمة بالسلام عليكم فقط ثم انتظري المتصل.
+لا تقاطعي المتصل.
+انتظري حتى ينتهي من كلامه.
 أجيبي فقط على كلامه أو سؤاله.
 الرد جملة أو جملتان فقط.
 لا تفتحي موضوعاً من نفسك.
 لا تخمني ولا تختلقي معلومات عن جعفر.
-لا تكرري الكلام ولا تقاطعي المتصل.
+لا تكرري الكلام.
 تحدثي بالعربية السودانية الطبيعية وبصيغة المؤنث.
 إذا تحدث المتصل بالإنجليزية فردي بالإنجليزية باختصار.
+
+إذا كان المتصل يريد جعفر أو يريد ترك رسالة، حاولي بصورة طبيعية معرفة:
+اسمه، سبب الاتصال، والرسالة التي يريد إيصالها.
+لا تحولي المكالمة إلى استجواب.
+اسألي فقط عن المعلومات الضرورية.
+
+قبل انتهاء المحادثة، عندما تتوفر معلومات كافية، استخدمي أداة save_call_record لحفظ بيانات المكالمة.
+لا تخبري المتصل عن الأداة أو قاعدة البيانات.
 
 استخدمي ذاكرة جعفر فقط عندما تكون مرتبطة مباشرة بسؤال المتصل.
 لا تسردي الذاكرة من نفسك.
@@ -340,6 +362,43 @@ ${memory || "لا توجد معلومات محفوظة."}
 
 برنامج جعفر الحالي:
 ${schedule || "لا توجد ارتباطات حالية أو قادمة مسجلة."}`,
+
+        tools: [
+          {
+            type: "function",
+            name: "save_call_record",
+            description: "احفظ معلومات المتصل وسبب الاتصال والرسالة وملخص المكالمة لجعفر.",
+            parameters: {
+              type: "object",
+              properties: {
+                caller_name: {
+                  type: "string",
+                  description: "اسم المتصل إذا ذكره"
+                },
+                reason: {
+                  type: "string",
+                  description: "سبب الاتصال باختصار"
+                },
+                message: {
+                  type: "string",
+                  description: "الرسالة التي يريد المتصل إيصالها لجعفر"
+                },
+                summary: {
+                  type: "string",
+                  description: "ملخص قصير جداً للمكالمة"
+                }
+              },
+              required: [
+                "caller_name",
+                "reason",
+                "message",
+                "summary"
+              ]
+            }
+          }
+        ],
+
+        tool_choice: "auto",
 
         audio: {
           input: {
@@ -367,7 +426,7 @@ ${schedule || "لا توجد ارتباطات حالية أو قادمة مسج�
     }));
   });
 
-  openai.on("message", (raw) => {
+  openai.on("message", async (raw) => {
     try {
       const data = JSON.parse(raw.toString());
 
@@ -405,6 +464,47 @@ ${schedule || "لا توجد ارتباطات حالية أو قادمة مسج�
           }
         }));
       }
+
+      if (
+        data.type === "response.function_call_arguments.done" &&
+        data.name === "save_call_record" &&
+        !callSaved
+      ) {
+        let args = {};
+
+        try {
+          args = JSON.parse(data.arguments || "{}");
+        } catch {
+          args = {};
+        }
+
+        const ok = await supabaseInsert("jafar_calls", {
+          caller_number: callerNumber,
+          caller_name: args.caller_name || null,
+          reason: args.reason || null,
+          message: args.message || null,
+          summary: args.summary || null,
+          called_at: new Date().toISOString()
+        });
+
+        if (ok) {
+          callSaved = true;
+          console.log("CALL RECORD SAVED:", callerNumber);
+        }
+
+        if (data.call_id) {
+          openai.send(JSON.stringify({
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: data.call_id,
+              output: JSON.stringify({
+                success: ok
+              })
+            }
+          }));
+        }
+      }
     } catch (err) {
       console.error(
         "OPENAI MESSAGE ERROR:",
@@ -439,9 +539,18 @@ ${schedule || "لا توجد ارتباطات حالية أو قادمة مسج�
       if (data.event === "start") {
         streamSid = data.start.streamSid;
 
+        callerNumber =
+          data.start?.customParameters?.callerNumber ||
+          callerNumber;
+
         console.log(
           "TWILIO STREAM STARTED:",
           streamSid
+        );
+
+        console.log(
+          "CALLER NUMBER:",
+          callerNumber
         );
       }
 
@@ -466,8 +575,24 @@ ${schedule || "لا توجد ارتباطات حالية أو قادمة مسج�
     }
   });
 
-  socket.on("close", () => {
+  socket.on("close", async () => {
     console.log("TWILIO WEBSOCKET CLOSED");
+
+    if (!callSaved) {
+      await supabaseInsert("jafar_calls", {
+        caller_number: callerNumber,
+        caller_name: null,
+        reason: null,
+        message: null,
+        summary: "مكالمة واردة - لم يتم جمع تفاصيل كافية.",
+        called_at: new Date().toISOString()
+      });
+
+      console.log(
+        "BASIC CALL RECORD SAVED:",
+        callerNumber
+      );
+    }
 
     if (openai.readyState < WebSocket.CLOSING) {
       openai.close();
