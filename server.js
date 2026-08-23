@@ -15,15 +15,20 @@ app.get("/", async () => ({ status: "Jafar Phone AI running" }));
 app.post("/incoming-call", async (request, reply) => {
   console.log("INCOMING CALL RECEIVED");
 
-  reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream"/>
+    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream"></Stream>
   </Connect>
-</Response>`);
+</Response>`;
+
+  return reply
+    .code(200)
+    .header("Content-Type", "text/xml")
+    .send(twiml);
 });
 
-app.get("/media-stream", { websocket: true }, (socket) => {
+app.get("/media-stream", { websocket: true }, (socket, request) => {
   console.log("TWILIO WEBSOCKET CONNECTED");
 
   let streamSid = null;
@@ -45,7 +50,7 @@ app.get("/media-stream", { websocket: true }, (socket) => {
       session: {
         type: "realtime",
         instructions:
-          "أنت المساعد الهاتفي الآلي لجعفر. ابدأ بالعربية وعرّف نفسك بوضوح كمساعد جعفر الآلي. تحدث باختصار وبشكل طبيعي. استخدم العربية السودانية مع المتحدث بالعربية والإنجليزية مع المتحدث بالإنجليزية.",
+          "أنت المساعد الهاتفي الآلي لجعفر. ابدأ بالعربية وعرّف نفسك بوضوح كمساعد جعفر الآلي. تحدث بشكل طبيعي ومختصر. استخدم العربية السودانية إذا تحدث المتصل بالعربية، والإنجليزية إذا تحدث بالإنجليزية.",
         audio: {
           input: {
             format: { type: "audio/pcmu" },
@@ -69,23 +74,22 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
     if (data.type === "error") {
       console.error("OPENAI ERROR:", JSON.stringify(data));
+      return;
     }
 
-    if (
-      data.type === "response.output_audio.delta" &&
-      streamSid &&
-      socket.readyState === WebSocket.OPEN
-    ) {
+    if (data.type === "response.output_audio.delta" && streamSid) {
       socket.send(JSON.stringify({
         event: "media",
         streamSid,
-        media: { payload: data.delta }
+        media: {
+          payload: data.delta
+        }
       }));
     }
   });
 
-  openai.on("error", (error) => {
-    console.error("OPENAI WS ERROR:", error.message);
+  openai.on("error", (err) => {
+    console.error("OPENAI WS ERROR:", err.message);
   });
 
   openai.on("close", (code, reason) => {
@@ -94,6 +98,10 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
   socket.on("message", (raw) => {
     const data = JSON.parse(raw.toString());
+
+    if (data.event === "connected") {
+      console.log("TWILIO CONNECTED EVENT");
+    }
 
     if (data.event === "start") {
       streamSid = data.start.streamSid;
@@ -112,6 +120,10 @@ app.get("/media-stream", { websocket: true }, (socket) => {
     }
   });
 
+  socket.on("error", (err) => {
+    console.error("TWILIO WS ERROR:", err.message);
+  });
+
   socket.on("close", () => {
     console.log("TWILIO WEBSOCKET CLOSED");
 
@@ -121,10 +133,6 @@ app.get("/media-stream", { websocket: true }, (socket) => {
     ) {
       openai.close();
     }
-  });
-
-  socket.on("error", (error) => {
-    console.error("TWILIO WS ERROR:", error.message);
   });
 });
 
