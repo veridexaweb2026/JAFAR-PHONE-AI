@@ -32,6 +32,7 @@ app.get("/media-stream", { websocket: true }, (socket) => {
   console.log("TWILIO WEBSOCKET CONNECTED");
 
   let streamSid = null;
+  let greetingSent = false;
 
   const openai = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-realtime",
@@ -50,21 +51,26 @@ app.get("/media-stream", { websocket: true }, (socket) => {
       session: {
         type: "realtime",
 
-        instructions:"أنتِ مساعدة جعفر الهاتفية. عند بداية المكالمة قولي فقط: السلام عليكم. ثم انتظري المتصل ولا تضيفي أي كلام حتى يتحدث. بعد ذلك أجيبي فقط على كلامه أو سؤاله. الرد جملة أو جملتان فقط. لا تفتحي موضوعاً من نفسك، ولا تخمني أو تختلقي معلومات عن جعفر. إذا لم تعرفي قولي: ما عندي المعلومة دي حالياً. لا تكرري ولا تقاطعي. تحدثي بالعربية السودانية الطبيعية وبصيغة المؤنث، وإذا تحدث المتصل بالإنجليزية فردي بالإنجليزية باختصار.",
+        instructions:
+          "أنتِ مساعدة جعفر الهاتفية. بعد التحية لا تتكلمي من نفسك ولا تفتحي أي موضوع. انتظري المتصل حتى ينتهي من كلامه ثم أجيبي فقط على كلامه أو سؤاله. اجعلي الرد جملة أو جملتين فقط. لا تخمني ولا تختلقي معلومات عن جعفر. إذا لم تعرفي قولي: ما عندي المعلومة دي حالياً. لا تكرري الكلام ولا تقاطعي المتصل. تحدثي بالعربية السودانية الطبيعية وبصيغة المؤنث. إذا تحدث المتصل بالإنجليزية فردي بالإنجليزية باختصار.",
+
         audio: {
           input: {
             format: {
               type: "audio/pcmu"
             },
-         turn_detection: {
-  type: "server_vad",
-  threshold: 0.6,
-  prefix_padding_ms: 300,
-  silence_duration_ms: 1200,
-  create_response: true,
-  interrupt_response: true
-},
-},         output: {
+
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.6,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 1200,
+              create_response: true,
+              interrupt_response: true
+            }
+          },
+
+          output: {
             format: {
               type: "audio/pcmu"
             },
@@ -79,8 +85,22 @@ app.get("/media-stream", { websocket: true }, (socket) => {
     try {
       const data = JSON.parse(raw.toString());
 
+      if (data.type === "session.updated" && !greetingSent) {
+        greetingSent = true;
+
+        openai.send(JSON.stringify({
+          type: "response.create",
+          response: {
+            instructions: "قولي فقط: السلام عليكم"
+          }
+        }));
+      }
+
       if (data.type === "error") {
-        console.error("OPENAI ERROR:", JSON.stringify(data));
+        console.error(
+          "OPENAI ERROR:",
+          JSON.stringify(data)
+        );
         return;
       }
 
@@ -97,12 +117,18 @@ app.get("/media-stream", { websocket: true }, (socket) => {
         }));
       }
     } catch (err) {
-      console.error("OPENAI MESSAGE ERROR:", err.message);
+      console.error(
+        "OPENAI MESSAGE ERROR:",
+        err.message
+      );
     }
   });
 
   openai.on("error", (err) => {
-    console.error("OPENAI WS ERROR:", err.message);
+    console.error(
+      "OPENAI WS ERROR:",
+      err.message
+    );
   });
 
   openai.on("close", (code, reason) => {
@@ -123,6 +149,7 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
       if (data.event === "start") {
         streamSid = data.start.streamSid;
+
         console.log(
           "TWILIO STREAM STARTED:",
           streamSid
