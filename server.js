@@ -65,8 +65,7 @@ app.get("/media-stream", { websocket: true }, (socket) => {
   create_response: true,
   interrupt_response: true
 },
-
-          output: {
+},         output: {
             format: {
               type: "audio/pcmu"
             },
