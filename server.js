@@ -1,32 +1,29 @@
 import Fastify from "fastify";
-import formbody from "@fastify/formbody";
 import websocket from "@fastify/websocket";
 import WebSocket from "ws";
 
-const fastify = Fastify({ logger: true });
+const app = Fastify({ logger: true });
 
-await fastify.register(formbody);
-await fastify.register(websocket);
+await app.register(websocket);
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-fastify.get("/", async () => ({ status: "Jafar Phone AI running" }));
+app.get("/", async () => ({ status: "Jafar Phone AI running" }));
 
-fastify.all("/incoming-call", async (request, reply) => {
+app.post("/incoming-call", async (request, reply) => {
   console.log("INCOMING CALL RECEIVED");
 
-  const host = request.headers.host;
-
-  reply.type("text/xml").send(`
+  reply
+    .type("text/xml")
+    .send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="wss://${host}/media-stream" />
+    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream"/>
   </Connect>
-</Response>
-`);
+</Response>`);
 });
 
-fastify.get("/media-stream", { websocket: true }, (socket) => {
+app.get("/media-stream", { websocket: true }, (socket) => {
   console.log("TWILIO WEBSOCKET CONNECTED");
 
   let streamSid = null;
@@ -48,10 +45,12 @@ fastify.get("/media-stream", { websocket: true }, (socket) => {
       session: {
         type: "realtime",
         instructions:
-          "You are Jafar's AI phone assistant. Always begin in Arabic and clearly say you are Jafar's AI assistant. Speak naturally, briefly, and conversationally. Use Sudanese Arabic when the caller speaks Arabic and English when the caller speaks English.",
+          "أنت المساعد الهاتفي الآلي لجعفر. ابدأ الحديث بالعربية وعرّف نفسك بوضوح كمساعد جعفر الآلي. تحدث بصورة طبيعية ومختصرة. إذا تحدث المتصل بالعربية فاستخدم العربية السودانية، وإذا تحدث بالإنجليزية فاستخدم الإنجليزية.",
         audio: {
           input: {
-            format: { type: "audio/pcmu" },
+            format: {
+              type: "audio/pcmu"
+            },
             turn_detection: {
               type: "server_vad",
               create_response: true,
@@ -59,7 +58,9 @@ fastify.get("/media-stream", { websocket: true }, (socket) => {
             }
           },
           output: {
-            format: { type: "audio/pcmu" },
+            format: {
+              type: "audio/pcmu"
+            },
             voice: "marin"
           }
         }
@@ -71,10 +72,15 @@ fastify.get("/media-stream", { websocket: true }, (socket) => {
     const data = JSON.parse(raw.toString());
 
     if (data.type === "error") {
-      console.error("OPENAI ERROR:", JSON.stringify(data));
+      console.error("OPENAI ERROR", JSON.stringify(data));
+      return;
     }
 
-    if (data.type === "response.output_audio.delta" && streamSid) {
+    if (
+      data.type === "response.output_audio.delta" &&
+      streamSid &&
+      socket.readyState === WebSocket.OPEN
+    ) {
       socket.send(JSON.stringify({
         event: "media",
         streamSid,
@@ -85,20 +91,24 @@ fastify.get("/media-stream", { websocket: true }, (socket) => {
     }
   });
 
-  openai.on("error", (error) => {
-    console.error("OPENAI WS ERROR:", error.message);
+  openai.on("error", (err) => {
+    console.error("OPENAI WS ERROR", err.message);
   });
 
   openai.on("close", (code, reason) => {
-    console.log("OPENAI CLOSED:", code, reason.toString());
+    console.log("OPENAI CLOSED", code, reason.toString());
   });
 
   socket.on("message", (raw) => {
     const data = JSON.parse(raw.toString());
 
+    if (data.event === "connected") {
+      console.log("TWILIO CONNECTED EVENT");
+    }
+
     if (data.event === "start") {
       streamSid = data.start.streamSid;
-      console.log("TWILIO STREAM STARTED:", streamSid);
+      console.log("TWILIO STREAM STARTED", streamSid);
     }
 
     if (
@@ -127,12 +137,12 @@ fastify.get("/media-stream", { websocket: true }, (socket) => {
     }
   });
 
-  socket.on("error", (error) => {
-    console.error("TWILIO WS ERROR:", error.message);
+  socket.on("error", (err) => {
+    console.error("TWILIO WS ERROR", err.message);
   });
 });
 
-await fastify.listen({
+await app.listen({
   port: process.env.PORT || 10000,
   host: "0.0.0.0"
 });
