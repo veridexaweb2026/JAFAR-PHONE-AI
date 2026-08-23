@@ -1,9 +1,11 @@
 import Fastify from "fastify";
+import formbody from "@fastify/formbody";
 import websocket from "@fastify/websocket";
 import WebSocket from "ws";
 
 const app = Fastify({ logger: true });
 
+await app.register(formbody);
 await app.register(websocket);
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -13,9 +15,7 @@ app.get("/", async () => ({ status: "Jafar Phone AI running" }));
 app.post("/incoming-call", async (request, reply) => {
   console.log("INCOMING CALL RECEIVED");
 
-  reply
-    .type("text/xml")
-    .send(`<?xml version="1.0" encoding="UTF-8"?>
+  reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="wss://jafar-phone-ai.onrender.com/media-stream"/>
@@ -45,12 +45,10 @@ app.get("/media-stream", { websocket: true }, (socket) => {
       session: {
         type: "realtime",
         instructions:
-          "أنت المساعد الهاتفي الآلي لجعفر. ابدأ الحديث بالعربية وعرّف نفسك بوضوح كمساعد جعفر الآلي. تحدث بصورة طبيعية ومختصرة. إذا تحدث المتصل بالعربية فاستخدم العربية السودانية، وإذا تحدث بالإنجليزية فاستخدم الإنجليزية.",
+          "أنت المساعد الهاتفي الآلي لجعفر. ابدأ بالعربية وعرّف نفسك بوضوح كمساعد جعفر الآلي. تحدث باختصار وبشكل طبيعي. استخدم العربية السودانية مع المتحدث بالعربية والإنجليزية مع المتحدث بالإنجليزية.",
         audio: {
           input: {
-            format: {
-              type: "audio/pcmu"
-            },
+            format: { type: "audio/pcmu" },
             turn_detection: {
               type: "server_vad",
               create_response: true,
@@ -58,9 +56,7 @@ app.get("/media-stream", { websocket: true }, (socket) => {
             }
           },
           output: {
-            format: {
-              type: "audio/pcmu"
-            },
+            format: { type: "audio/pcmu" },
             voice: "marin"
           }
         }
@@ -72,8 +68,7 @@ app.get("/media-stream", { websocket: true }, (socket) => {
     const data = JSON.parse(raw.toString());
 
     if (data.type === "error") {
-      console.error("OPENAI ERROR", JSON.stringify(data));
-      return;
+      console.error("OPENAI ERROR:", JSON.stringify(data));
     }
 
     if (
@@ -84,37 +79,28 @@ app.get("/media-stream", { websocket: true }, (socket) => {
       socket.send(JSON.stringify({
         event: "media",
         streamSid,
-        media: {
-          payload: data.delta
-        }
+        media: { payload: data.delta }
       }));
     }
   });
 
-  openai.on("error", (err) => {
-    console.error("OPENAI WS ERROR", err.message);
+  openai.on("error", (error) => {
+    console.error("OPENAI WS ERROR:", error.message);
   });
 
   openai.on("close", (code, reason) => {
-    console.log("OPENAI CLOSED", code, reason.toString());
+    console.log("OPENAI CLOSED:", code, reason.toString());
   });
 
   socket.on("message", (raw) => {
     const data = JSON.parse(raw.toString());
 
-    if (data.event === "connected") {
-      console.log("TWILIO CONNECTED EVENT");
-    }
-
     if (data.event === "start") {
       streamSid = data.start.streamSid;
-      console.log("TWILIO STREAM STARTED", streamSid);
+      console.log("TWILIO STREAM STARTED:", streamSid);
     }
 
-    if (
-      data.event === "media" &&
-      openai.readyState === WebSocket.OPEN
-    ) {
+    if (data.event === "media" && openai.readyState === WebSocket.OPEN) {
       openai.send(JSON.stringify({
         type: "input_audio_buffer.append",
         audio: data.media.payload
@@ -137,8 +123,8 @@ app.get("/media-stream", { websocket: true }, (socket) => {
     }
   });
 
-  socket.on("error", (err) => {
-    console.error("TWILIO WS ERROR", err.message);
+  socket.on("error", (error) => {
+    console.error("TWILIO WS ERROR:", error.message);
   });
 });
 
