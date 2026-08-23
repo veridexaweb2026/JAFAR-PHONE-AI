@@ -9,8 +9,28 @@ await app.register(formbody);
 await app.register(websocket);
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+async function loadMemory() {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/jafar_memory?active=eq.true&select=category,content`,
+      {
+        headers: {
+          apikey: SUPABASE_SECRET_KEY,
+          Authorization: `Bearer ${SUPABASE_SECRET_KEY}`
+        }
+      }
+    );
 
-app.get("/", async () => ({
+    if (!res.ok) return "";
+
+    const rows = await res.json();
+    return rows.map(x => `[${x.category}] ${x.content}`).join("\n");
+  } catch {
+    return "";
+  }
+}app.get("/media-stream", { websocket: true }, async (socket) => {
   status: "Jafar Phone AI running"
 }));
 
@@ -33,7 +53,7 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
   let streamSid = null;
   let greetingSent = false;
-
+const memory = await loadMemory();
   const openai = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-realtime",
     {
@@ -51,9 +71,10 @@ app.get("/media-stream", { websocket: true }, (socket) => {
       session: {
         type: "realtime",
 
-        instructions:
-          "أنتِ مساعدة جعفر الهاتفية. بعد التحية لا تتكلمي من نفسك ولا تفتحي أي موضوع. انتظري المتصل حتى ينتهي من كلامه ثم أجيبي فقط على كلامه أو سؤاله. اجعلي الرد جملة أو جملتين فقط. لا تخمني ولا تختلقي معلومات عن جعفر. إذا لم تعرفي قولي: ما عندي المعلومة دي حالياً. لا تكرري الكلام ولا تقاطعي المتصل. تحدثي بالعربية السودانية الطبيعية وبصيغة المؤنث. إذا تحدث المتصل بالإنجليزية فردي بالإنجليزية باختصار.",
+        instructions: `أنتِ مساعدة جعفر الهاتفية. بعد التحية انتظري المتصل حتى ينتهي من كلامه ثم أجيبي فقط على كلامه أو سؤاله. الرد جملة أو جملتان فقط. لا تخمني ولا تختلقي معلومات عن جعفر. استخدمي معلومات ذاكرة جعفر أدناه فقط عندما تكون مرتبطة مباشرة بسؤال المتصل. لا تسردي الذاكرة من نفسك. إذا لم تجدي الإجابة في الذاكرة فقولي: ما عندي المعلومة دي حالياً. لا تكرري ولا تقاطعي. تحدثي بالعربية السودانية الطبيعية وبصيغة المؤنث. إذا تحدث المتصل بالإنجليزية فردي بالإنجليزية باختصار.
 
+ذاكرة جعفر:
+${memory}`,
         audio: {
           input: {
             format: {
