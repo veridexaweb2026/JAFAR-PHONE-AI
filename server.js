@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import formbody from "@fastify/formbody";
 import websocket from "@fastify/websocket";
 import WebSocket from "ws";
+import fs from "fs";
 
 const app = Fastify({ logger: true });
 
@@ -33,6 +34,35 @@ async function supabaseGet(path) {
   }
 }
 
+async function supabaseInsert(table, data) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SECRET_KEY,
+        Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal"
+      },
+      body: JSON.stringify(data)
+    });
+
+    if (!res.ok) {
+      console.error(
+        "SUPABASE INSERT FAILED:",
+        res.status,
+        await res.text()
+      );
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error("SUPABASE INSERT ERROR:", err.message);
+    return false;
+  }
+}
+
 async function loadMemory() {
   const rows = await supabaseGet(
     "jafar_memory?active=eq.true&select=category,content"
@@ -60,7 +90,7 @@ async function loadSchedule() {
 النهاية: ${row.ends_at || ""}`;
       }
 
-      return `[خاص - لا تكشفي التفاصيل للمتصل]
+      return `[خاص - لا تكشفي التفاصيل]
 جعفر لديه ارتباط من ${row.starts_at} إلى ${row.ends_at || "وقت غير محدد"}.
 إذا سأل المتصل عن هذا الوقت، قولي فقط إن جعفر لديه ارتباط في ذلك الوقت.`;
     })
@@ -70,6 +100,90 @@ async function loadSchedule() {
 app.get("/", async () => ({
   status: "Jafar Phone AI running"
 }));
+
+app.get("/admin", async (request, reply) => {
+  try {
+    const html = fs.readFileSync("./admin.html", "utf8");
+
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(html);
+  } catch (err) {
+    console.error("ADMIN PAGE ERROR:", err.message);
+
+    return reply
+      .code(500)
+      .send("Admin page unavailable");
+  }
+});
+
+app.post("/admin/memory", async (request, reply) => {
+  const { category, content } = request.body || {};
+
+  if (!category || !content) {
+    return reply.code(400).send({
+      error: "Missing category or content"
+    });
+  }
+
+  const success = await supabaseInsert(
+    "jafar_memory",
+    {
+      category,
+      content,
+      active: true
+    }
+  );
+
+  if (!success) {
+    return reply.code(500).send({
+      error: "Memory save failed"
+    });
+  }
+
+  return {
+    success: true
+  };
+});
+
+app.post("/admin/schedule", async (request, reply) => {
+  const {
+    title,
+    details,
+    starts_at,
+    ends_at,
+    share_with_callers
+  } = request.body || {};
+
+  if (!title || !starts_at) {
+    return reply.code(400).send({
+      error: "Missing title or starts_at"
+    });
+  }
+
+  const success = await supabaseInsert(
+    "jafar_schedule",
+    {
+      title,
+      details: details || null,
+      starts_at,
+      ends_at: ends_at || null,
+      share_with_callers:
+        share_with_callers === true,
+      active: true
+    }
+  );
+
+  if (!success) {
+    return reply.code(500).send({
+      error: "Schedule save failed"
+    });
+  }
+
+  return {
+    success: true
+  };
+});
 
 app.post("/incoming-call", async (request, reply) => {
   console.log("INCOMING CALL RECEIVED");
@@ -224,7 +338,10 @@ ${schedule || "لا توجد ارتباطات حالية أو قادمة مسج�
   });
 
   openai.on("error", (err) => {
-    console.error("OPENAI WS ERROR:", err.message);
+    console.error(
+      "OPENAI WS ERROR:",
+      err.message
+    );
   });
 
   openai.on("close", (code, reason) => {
@@ -284,7 +401,10 @@ ${schedule || "لا توجد ارتباطات حالية أو قادمة مسج�
   });
 
   socket.on("error", (err) => {
-    console.error("TWILIO WS ERROR:", err.message);
+    console.error(
+      "TWILIO WS ERROR:",
+      err.message
+    );
   });
 });
 
