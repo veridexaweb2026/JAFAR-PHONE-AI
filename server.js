@@ -12,32 +12,59 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 
-async function loadMemory() {
+async function supabaseGet(path) {
   try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/jafar_memory?active=eq.true&select=category,content`,
-      {
-        headers: {
-          apikey: SUPABASE_SECRET_KEY,
-          Authorization: `Bearer ${SUPABASE_SECRET_KEY}`
-        }
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers: {
+        apikey: SUPABASE_SECRET_KEY,
+        Authorization: `Bearer ${SUPABASE_SECRET_KEY}`
       }
-    );
+    });
 
     if (!res.ok) {
-      console.error("MEMORY LOAD FAILED:", res.status);
-      return "";
+      console.error("SUPABASE GET FAILED:", res.status, path);
+      return [];
     }
 
-    const rows = await res.json();
-
-    return rows
-      .map((row) => `[${row.category}] ${row.content}`)
-      .join("\n");
+    return await res.json();
   } catch (err) {
-    console.error("MEMORY ERROR:", err.message);
-    return "";
+    console.error("SUPABASE ERROR:", err.message);
+    return [];
   }
+}
+
+async function loadMemory() {
+  const rows = await supabaseGet(
+    "jafar_memory?active=eq.true&select=category,content"
+  );
+
+  return rows
+    .map((row) => `[${row.category}] ${row.content}`)
+    .join("\n");
+}
+
+async function loadSchedule() {
+  const now = new Date().toISOString();
+
+  const rows = await supabaseGet(
+    `jafar_schedule?active=eq.true&ends_at=gte.${encodeURIComponent(now)}&select=title,details,starts_at,ends_at,share_with_callers&order=starts_at.asc&limit=20`
+  );
+
+  return rows
+    .map((row) => {
+      if (row.share_with_callers) {
+        return `[مسموح بالمشاركة]
+العنوان: ${row.title}
+التفاصيل: ${row.details || ""}
+البداية: ${row.starts_at}
+النهاية: ${row.ends_at || ""}`;
+      }
+
+      return `[خاص - لا تكشفي التفاصيل للمتصل]
+جعفر لديه ارتباط من ${row.starts_at} إلى ${row.ends_at || "وقت غير محدد"}.
+إذا سأل المتصل عن هذا الوقت، قولي فقط إن جعفر لديه ارتباط في ذلك الوقت.`;
+    })
+    .join("\n\n");
 }
 
 app.get("/", async () => ({
@@ -63,7 +90,6 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
   let streamSid = null;
   let greetingSent = false;
-  let memory = "";
 
   const openai = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-realtime",
@@ -77,12 +103,13 @@ app.get("/media-stream", { websocket: true }, (socket) => {
   openai.on("open", async () => {
     console.log("OPENAI CONNECTED");
 
-    memory = await loadMemory();
+    const [memory, schedule] = await Promise.all([
+      loadMemory(),
+      loadSchedule()
+    ]);
 
-    console.log(
-      "MEMORY LOADED:",
-      memory ? "YES" : "EMPTY"
-    );
+    console.log("MEMORY LOADED:", memory ? "YES" : "EMPTY");
+    console.log("SCHEDULE LOADED:", schedule ? "YES" : "EMPTY");
 
     openai.send(
       JSON.stringify({
@@ -94,20 +121,29 @@ app.get("/media-stream", { websocket: true }, (socket) => {
 
 بعد التحية انتظري المتصل حتى ينتهي من كلامه.
 أجيبي فقط على كلامه أو سؤاله.
-اجعلي الرد جملة أو جملتين فقط.
+الرد جملة أو جملتان فقط.
 لا تفتحي موضوعاً من نفسك.
 لا تخمني ولا تختلقي معلومات عن جعفر.
 لا تكرري الكلام ولا تقاطعي المتصل.
 تحدثي بالعربية السودانية الطبيعية وبصيغة المؤنث.
 إذا تحدث المتصل بالإنجليزية فردي بالإنجليزية باختصار.
 
-استخدمي ذاكرة جعفر أدناه فقط إذا كانت مرتبطة مباشرة بسؤال المتصل.
+استخدمي ذاكرة جعفر فقط عندما تكون مرتبطة مباشرة بسؤال المتصل.
 لا تسردي الذاكرة من نفسك.
-إذا لم تكن الإجابة موجودة في الذاكرة فقولي:
+
+لديك أيضاً برنامج جعفر الحالي.
+المواعيد المكتوب عليها "خاص" سرية.
+يمكنك معرفة أن جعفر مشغول في ذلك الوقت، لكن لا تكشفي اسم الموعد أو تفاصيله.
+المواعيد المكتوب عليها "مسموح بالمشاركة" يمكن ذكر تفاصيلها عند الحاجة.
+
+إذا لم تعرفي الإجابة، لا تخمني وقولي:
 ما عندي المعلومة دي حالياً.
 
 ذاكرة جعفر:
-${memory}`,
+${memory || "لا توجد معلومات محفوظة."}
+
+برنامج جعفر الحالي:
+${schedule || "لا توجد ارتباطات حالية أو قادمة مسجلة."}`,
 
           audio: {
             input: {
@@ -188,10 +224,7 @@ ${memory}`,
   });
 
   openai.on("error", (err) => {
-    console.error(
-      "OPENAI WS ERROR:",
-      err.message
-    );
+    console.error("OPENAI WS ERROR:", err.message);
   });
 
   openai.on("close", (code, reason) => {
@@ -251,10 +284,7 @@ ${memory}`,
   });
 
   socket.on("error", (err) => {
-    console.error(
-      "TWILIO WS ERROR:",
-      err.message
-    );
+    console.error("TWILIO WS ERROR:", err.message);
   });
 });
 
