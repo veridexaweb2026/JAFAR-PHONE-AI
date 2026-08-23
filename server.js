@@ -1,414 +1,400 @@
-import Fastify from "fastify";
-import formbody from "@fastify/formbody";
-import websocket from "@fastify/websocket";
-import WebSocket from "ws";
-import fs from "fs";
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jafar AI</title>
 
-const app = Fastify({ logger: true });
+<style>
+body{
+  font-family:Arial,sans-serif;
+  max-width:650px;
+  margin:auto;
+  padding:18px;
+  background:#f3f4f6;
+}
+h1{text-align:center}
+.card{
+  background:white;
+  padding:18px;
+  margin-bottom:18px;
+  border-radius:14px;
+}
+input,textarea,select,button{
+  width:100%;
+  box-sizing:border-box;
+  padding:12px;
+  margin-top:7px;
+  margin-bottom:10px;
+  font-size:16px;
+}
+button{
+  cursor:pointer;
+  font-weight:bold;
+}
+.item{
+  border:1px solid #ddd;
+  border-radius:10px;
+  padding:12px;
+  margin:10px 0;
+}
+.item p{
+  white-space:pre-wrap;
+}
+.actions{
+  display:flex;
+  gap:8px;
+}
+.actions button{
+  width:50%;
+}
+.status{
+  text-align:center;
+  font-weight:bold;
+  margin:10px;
+}
+small{color:#666}
+</style>
+</head>
 
-await app.register(formbody);
-await app.register(websocket);
+<body>
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+<h1>Jafar AI</h1>
 
-async function supabaseGet(path) {
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-      headers: {
-        apikey: SUPABASE_SECRET_KEY,
-        Authorization: `Bearer ${SUPABASE_SECRET_KEY}`
-      }
-    });
+<div class="card">
+<h2>🧠 إضافة للذاكرة</h2>
 
-    if (!res.ok) {
-      console.error("SUPABASE GET FAILED:", res.status, path);
-      return [];
-    }
+<select id="category">
+<option value="personal">معلومة شخصية</option>
+<option value="business">عمل</option>
+<option value="instruction">تعليمات للمساعدة</option>
+<option value="temporary">معلومة مؤقتة</option>
+</select>
 
-    return await res.json();
-  } catch (err) {
-    console.error("SUPABASE ERROR:", err.message);
-    return [];
+<textarea id="memory" rows="4"
+placeholder="اكتب المعلومة هنا"></textarea>
+
+<button onclick="addMemory()">حفظ في الذاكرة</button>
+</div>
+
+<div class="card">
+<h2>📅 إضافة موعد</h2>
+
+<input id="title" placeholder="اسم الموعد">
+
+<textarea id="details" rows="3"
+placeholder="ملاحظات"></textarea>
+
+<label>البداية</label>
+<input id="start" type="datetime-local">
+
+<label>النهاية</label>
+<input id="end" type="datetime-local">
+
+<label>هل مسموح للمساعدة بذكر التفاصيل؟</label>
+
+<select id="share">
+<option value="false">لا - خاص</option>
+<option value="true">نعم</option>
+</select>
+
+<button onclick="addSchedule()">حفظ الموعد</button>
+</div>
+
+<div id="status" class="status"></div>
+
+<div class="card">
+<h2>🧠 الذاكرة المحفوظة</h2>
+<button onclick="loadMemory()">تحديث</button>
+<div id="memoryList">جاري التحميل...</div>
+</div>
+
+<div class="card">
+<h2>📅 المواعيد المحفوظة</h2>
+<button onclick="loadSchedule()">تحديث</button>
+<div id="scheduleList">جاري التحميل...</div>
+</div>
+
+<script>
+
+function status(msg){
+  document.getElementById("status").textContent=msg;
+}
+
+async function addMemory(){
+  const category=document.getElementById("category").value;
+  const content=document.getElementById("memory").value.trim();
+
+  if(!content){
+    status("اكتب المعلومة أولاً");
+    return;
+  }
+
+  const r=await fetch("/admin/memory",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({category,content})
+  });
+
+  if(r.ok){
+    document.getElementById("memory").value="";
+    status("✅ تم حفظ المعلومة");
+    loadMemory();
+  }else{
+    status("❌ فشل حفظ المعلومة");
   }
 }
 
-async function supabaseInsert(table, data) {
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_SECRET_KEY,
-        Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
-        "Content-Type": "application/json",
-        Prefer: "return=minimal"
-      },
-      body: JSON.stringify(data)
-    });
+async function addSchedule(){
 
-    if (!res.ok) {
-      console.error(
-        "SUPABASE INSERT FAILED:",
-        res.status,
-        await res.text()
-      );
-      return false;
-    }
+  const title=document.getElementById("title").value.trim();
+  const details=document.getElementById("details").value.trim();
+  const starts_at=document.getElementById("start").value;
+  const ends_at=document.getElementById("end").value;
 
-    return true;
-  } catch (err) {
-    console.error("SUPABASE INSERT ERROR:", err.message);
-    return false;
-  }
-}
+  const share_with_callers=
+    document.getElementById("share").value==="true";
 
-async function loadMemory() {
-  const rows = await supabaseGet(
-    "jafar_memory?active=eq.true&select=category,content"
-  );
-
-  return rows
-    .map((row) => `[${row.category}] ${row.content}`)
-    .join("\n");
-}
-
-async function loadSchedule() {
-  const now = new Date().toISOString();
-
-  const rows = await supabaseGet(
-    `jafar_schedule?active=eq.true&ends_at=gte.${encodeURIComponent(now)}&select=title,details,starts_at,ends_at,share_with_callers&order=starts_at.asc&limit=20`
-  );
-
-  return rows
-    .map((row) => {
-      if (row.share_with_callers) {
-        return `[مسموح بالمشاركة]
-العنوان: ${row.title}
-التفاصيل: ${row.details || ""}
-البداية: ${row.starts_at}
-النهاية: ${row.ends_at || ""}`;
-      }
-
-      return `[خاص - لا تكشفي التفاصيل]
-جعفر لديه ارتباط من ${row.starts_at} إلى ${row.ends_at || "وقت غير محدد"}.
-إذا سأل المتصل عن هذا الوقت، قولي فقط إن جعفر لديه ارتباط في ذلك الوقت.`;
-    })
-    .join("\n\n");
-}
-
-app.get("/", async () => ({
-  status: "Jafar Phone AI running"
-}));
-
-app.get("/admin", async (request, reply) => {
-  try {
-    const html = fs.readFileSync("./admin.html", "utf8");
-
-    return reply
-      .type("text/html; charset=utf-8")
-      .send(html);
-  } catch (err) {
-    console.error("ADMIN PAGE ERROR:", err.message);
-
-    return reply
-      .code(500)
-      .send("Admin page unavailable");
-  }
-});
-
-app.post("/admin/memory", async (request, reply) => {
-  const { category, content } = request.body || {};
-
-  if (!category || !content) {
-    return reply.code(400).send({
-      error: "Missing category or content"
-    });
+  if(!title || !starts_at){
+    status("اكتب اسم الموعد ووقت البداية");
+    return;
   }
 
-  const success = await supabaseInsert(
-    "jafar_memory",
-    {
-      category,
-      content,
-      active: true
-    }
-  );
-
-  if (!success) {
-    return reply.code(500).send({
-      error: "Memory save failed"
-    });
-  }
-
-  return {
-    success: true
-  };
-});
-
-app.post("/admin/schedule", async (request, reply) => {
-  const {
-    title,
-    details,
-    starts_at,
-    ends_at,
-    share_with_callers
-  } = request.body || {};
-
-  if (!title || !starts_at) {
-    return reply.code(400).send({
-      error: "Missing title or starts_at"
-    });
-  }
-
-  const success = await supabaseInsert(
-    "jafar_schedule",
-    {
+  const r=await fetch("/admin/schedule",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
       title,
-      details: details || null,
+      details,
       starts_at,
-      ends_at: ends_at || null,
-      share_with_callers:
-        share_with_callers === true,
-      active: true
-    }
-  );
+      ends_at:ends_at||null,
+      share_with_callers
+    })
+  });
 
-  if (!success) {
-    return reply.code(500).send({
-      error: "Schedule save failed"
-    });
+  if(r.ok){
+    document.getElementById("title").value="";
+    document.getElementById("details").value="";
+    document.getElementById("start").value="";
+    document.getElementById("end").value="";
+    status("✅ تم حفظ الموعد");
+    loadSchedule();
+  }else{
+    status("❌ فشل حفظ الموعد");
+  }
+}
+
+async function loadMemory(){
+
+  const r=await fetch("/admin/memory");
+
+  if(!r.ok){
+    document.getElementById("memoryList").textContent=
+      "تعذر تحميل الذاكرة";
+    return;
   }
 
-  return {
-    success: true
-  };
-});
+  const rows=await r.json();
 
-app.post("/incoming-call", async (request, reply) => {
-  console.log("INCOMING CALL RECEIVED");
+  const box=document.getElementById("memoryList");
+  box.innerHTML="";
 
-  return reply
-    .code(200)
-    .type("text/xml")
-    .send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream" />
-  </Connect>
-</Response>`);
-});
+  if(!rows.length){
+    box.textContent="لا توجد معلومات";
+    return;
+  }
 
-app.get("/media-stream", { websocket: true }, (socket) => {
-  console.log("TWILIO WEBSOCKET CONNECTED");
+  rows.forEach(row=>{
 
-  let streamSid = null;
-  let greetingSent = false;
+    const div=document.createElement("div");
+    div.className="item";
 
-  const openai = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-realtime",
+    const p=document.createElement("p");
+    p.textContent=row.content;
+
+    const small=document.createElement("small");
+    small.textContent=row.category;
+
+    const actions=document.createElement("div");
+    actions.className="actions";
+
+    const edit=document.createElement("button");
+    edit.textContent="تعديل";
+    edit.onclick=()=>editMemory(row);
+
+    const del=document.createElement("button");
+    del.textContent="حذف";
+    del.onclick=()=>deleteMemory(row.id);
+
+    actions.append(edit,del);
+    div.append(p,small,actions);
+    box.appendChild(div);
+  });
+}
+
+async function editMemory(row){
+
+  const content=prompt(
+    "عدّل المعلومة:",
+    row.content
+  );
+
+  if(content===null || !content.trim()) return;
+
+  const r=await fetch(
+    "/admin/memory/"+row.id,
     {
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`
-      }
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        content:content.trim()
+      })
     }
   );
 
-  openai.on("open", async () => {
-    console.log("OPENAI CONNECTED");
+  if(r.ok){
+    status("✅ تم تعديل المعلومة");
+    loadMemory();
+  }else{
+    status("❌ فشل التعديل");
+  }
+}
 
-    const [memory, schedule] = await Promise.all([
-      loadMemory(),
-      loadSchedule()
-    ]);
+async function deleteMemory(id){
 
-    console.log("MEMORY LOADED:", memory ? "YES" : "EMPTY");
-    console.log("SCHEDULE LOADED:", schedule ? "YES" : "EMPTY");
+  if(!confirm("حذف هذه المعلومة؟")) return;
 
-    openai.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
+  const r=await fetch(
+    "/admin/memory/"+id,
+    {method:"DELETE"}
+  );
 
-          instructions: `أنتِ مساعدة جعفر الهاتفية.
+  if(r.ok){
+    status("✅ تم حذف المعلومة");
+    loadMemory();
+  }else{
+    status("❌ فشل الحذف");
+  }
+}
 
-بعد التحية انتظري المتصل حتى ينتهي من كلامه.
-أجيبي فقط على كلامه أو سؤاله.
-الرد جملة أو جملتان فقط.
-لا تفتحي موضوعاً من نفسك.
-لا تخمني ولا تختلقي معلومات عن جعفر.
-لا تكرري الكلام ولا تقاطعي المتصل.
-تحدثي بالعربية السودانية الطبيعية وبصيغة المؤنث.
-إذا تحدث المتصل بالإنجليزية فردي بالإنجليزية باختصار.
+async function loadSchedule(){
 
-استخدمي ذاكرة جعفر فقط عندما تكون مرتبطة مباشرة بسؤال المتصل.
-لا تسردي الذاكرة من نفسك.
+  const r=await fetch("/admin/schedule");
 
-لديك أيضاً برنامج جعفر الحالي.
-المواعيد المكتوب عليها "خاص" سرية.
-يمكنك معرفة أن جعفر مشغول في ذلك الوقت، لكن لا تكشفي اسم الموعد أو تفاصيله.
-المواعيد المكتوب عليها "مسموح بالمشاركة" يمكن ذكر تفاصيلها عند الحاجة.
+  if(!r.ok){
+    document.getElementById("scheduleList").textContent=
+      "تعذر تحميل المواعيد";
+    return;
+  }
 
-إذا لم تعرفي الإجابة، لا تخمني وقولي:
-ما عندي المعلومة دي حالياً.
+  const rows=await r.json();
 
-ذاكرة جعفر:
-${memory || "لا توجد معلومات محفوظة."}
+  const box=document.getElementById("scheduleList");
+  box.innerHTML="";
 
-برنامج جعفر الحالي:
-${schedule || "لا توجد ارتباطات حالية أو قادمة مسجلة."}`,
+  if(!rows.length){
+    box.textContent="لا توجد مواعيد";
+    return;
+  }
 
-          audio: {
-            input: {
-              format: {
-                type: "audio/pcmu"
-              },
+  rows.forEach(row=>{
 
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.6,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 1200,
-                create_response: true,
-                interrupt_response: true
-              }
-            },
+    const div=document.createElement("div");
+    div.className="item";
 
-            output: {
-              format: {
-                type: "audio/pcmu"
-              },
-              voice: "marin"
-            }
-          }
-        }
+    const title=document.createElement("strong");
+    title.textContent=row.title;
+
+    const p=document.createElement("p");
+
+    const start=new Date(row.starts_at).toLocaleString();
+    const end=row.ends_at
+      ?new Date(row.ends_at).toLocaleString()
+      :"غير محدد";
+
+    p.textContent=
+      `${row.details||""}\n${start} - ${end}`;
+
+    const small=document.createElement("small");
+    small.textContent=
+      row.share_with_callers
+      ?"مسموح بالمشاركة"
+      :"خاص";
+
+    const actions=document.createElement("div");
+    actions.className="actions";
+
+    const edit=document.createElement("button");
+    edit.textContent="تعديل";
+    edit.onclick=()=>editSchedule(row);
+
+    const del=document.createElement("button");
+    del.textContent="حذف";
+    del.onclick=()=>deleteSchedule(row.id);
+
+    actions.append(edit,del);
+    div.append(title,p,small,actions);
+    box.appendChild(div);
+  });
+}
+
+async function editSchedule(row){
+
+  const title=prompt(
+    "اسم الموعد:",
+    row.title
+  );
+
+  if(title===null || !title.trim()) return;
+
+  const details=prompt(
+    "الملاحظات:",
+    row.details||""
+  );
+
+  if(details===null) return;
+
+  const r=await fetch(
+    "/admin/schedule/"+row.id,
+    {
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        title:title.trim(),
+        details
       })
-    );
-  });
-
-  openai.on("message", (raw) => {
-    try {
-      const data = JSON.parse(raw.toString());
-
-      if (
-        data.type === "session.updated" &&
-        !greetingSent
-      ) {
-        greetingSent = true;
-
-        openai.send(
-          JSON.stringify({
-            type: "response.create",
-            response: {
-              instructions: "قولي فقط: السلام عليكم"
-            }
-          })
-        );
-      }
-
-      if (data.type === "error") {
-        console.error(
-          "OPENAI ERROR:",
-          JSON.stringify(data)
-        );
-        return;
-      }
-
-      if (
-        data.type === "response.output_audio.delta" &&
-        streamSid
-      ) {
-        socket.send(
-          JSON.stringify({
-            event: "media",
-            streamSid,
-            media: {
-              payload: data.delta
-            }
-          })
-        );
-      }
-    } catch (err) {
-      console.error(
-        "OPENAI MESSAGE ERROR:",
-        err.message
-      );
     }
-  });
+  );
 
-  openai.on("error", (err) => {
-    console.error(
-      "OPENAI WS ERROR:",
-      err.message
-    );
-  });
+  if(r.ok){
+    status("✅ تم تعديل الموعد");
+    loadSchedule();
+  }else{
+    status("❌ فشل تعديل الموعد");
+  }
+}
 
-  openai.on("close", (code, reason) => {
-    console.log(
-      "OPENAI CLOSED:",
-      code,
-      reason.toString()
-    );
-  });
+async function deleteSchedule(id){
 
-  socket.on("message", (raw) => {
-    try {
-      const data = JSON.parse(raw.toString());
+  if(!confirm("حذف هذا الموعد؟")) return;
 
-      if (data.event === "connected") {
-        console.log("TWILIO CONNECTED EVENT");
-      }
+  const r=await fetch(
+    "/admin/schedule/"+id,
+    {method:"DELETE"}
+  );
 
-      if (data.event === "start") {
-        streamSid = data.start.streamSid;
+  if(r.ok){
+    status("✅ تم حذف الموعد");
+    loadSchedule();
+  }else{
+    status("❌ فشل حذف الموعد");
+  }
+}
 
-        console.log(
-          "TWILIO STREAM STARTED:",
-          streamSid
-        );
-      }
+loadMemory();
+loadSchedule();
 
-      if (
-        data.event === "media" &&
-        openai.readyState === WebSocket.OPEN
-      ) {
-        openai.send(
-          JSON.stringify({
-            type: "input_audio_buffer.append",
-            audio: data.media.payload
-          })
-        );
-      }
+</script>
 
-      if (data.event === "stop") {
-        console.log("TWILIO STREAM STOPPED");
-      }
-    } catch (err) {
-      console.error(
-        "TWILIO MESSAGE ERROR:",
-        err.message
-      );
-    }
-  });
-
-  socket.on("close", () => {
-    console.log("TWILIO WEBSOCKET CLOSED");
-
-    if (openai.readyState < WebSocket.CLOSING) {
-      openai.close();
-    }
-  });
-
-  socket.on("error", (err) => {
-    console.error(
-      "TWILIO WS ERROR:",
-      err.message
-    );
-  });
-});
-
-await app.listen({
-  port: process.env.PORT || 10000,
-  host: "0.0.0.0"
-});
+</body>
+</html>
