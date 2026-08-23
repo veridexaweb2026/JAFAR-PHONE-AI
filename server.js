@@ -15,20 +15,18 @@ app.get("/", async () => ({ status: "Jafar Phone AI running" }));
 app.post("/incoming-call", async (request, reply) => {
   console.log("INCOMING CALL RECEIVED");
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream"></Stream>
-  </Connect>
-</Response>`;
-
   return reply
     .code(200)
-    .header("Content-Type", "text/xml")
-    .send(twiml);
+    .type("text/xml")
+    .send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="wss://jafar-phone-ai.onrender.com/media-stream" />
+  </Connect>
+</Response>`);
 });
 
-app.get("/media-stream", { websocket: true }, (socket, request) => {
+app.get("/media-stream", { websocket: true }, (socket) => {
   console.log("TWILIO WEBSOCKET CONNECTED");
 
   let streamSid = null;
@@ -50,7 +48,7 @@ app.get("/media-stream", { websocket: true }, (socket, request) => {
       session: {
         type: "realtime",
         instructions:
-          "أنت المساعد الهاتفي الآلي لجعفر. ابدأ بالعربية وعرّف نفسك بوضوح كمساعد جعفر الآلي. تحدث بشكل طبيعي ومختصر. استخدم العربية السودانية إذا تحدث المتصل بالعربية، والإنجليزية إذا تحدث بالإنجليزية.",
+          "أنت مساعد جعفر الهاتفي الآلي. ابدأ بالعربية وعرّف نفسك بوضوح كمساعد جعفر الآلي. تحدث باختصار وبشكل طبيعي. استخدم العربية السودانية مع المتحدث بالعربية والإنجليزية مع المتحدث بالإنجليزية.",
         audio: {
           input: {
             format: { type: "audio/pcmu" },
@@ -81,20 +79,18 @@ app.get("/media-stream", { websocket: true }, (socket, request) => {
       socket.send(JSON.stringify({
         event: "media",
         streamSid,
-        media: {
-          payload: data.delta
-        }
+        media: { payload: data.delta }
       }));
     }
   });
 
-  openai.on("error", (err) => {
-    console.error("OPENAI WS ERROR:", err.message);
-  });
+  openai.on("error", (err) =>
+    console.error("OPENAI WS ERROR:", err.message)
+  );
 
-  openai.on("close", (code, reason) => {
-    console.log("OPENAI CLOSED:", code, reason.toString());
-  });
+  openai.on("close", (code, reason) =>
+    console.log("OPENAI CLOSED:", code, reason.toString())
+  );
 
   socket.on("message", (raw) => {
     const data = JSON.parse(raw.toString());
@@ -108,7 +104,10 @@ app.get("/media-stream", { websocket: true }, (socket, request) => {
       console.log("TWILIO STREAM STARTED:", streamSid);
     }
 
-    if (data.event === "media" && openai.readyState === WebSocket.OPEN) {
+    if (
+      data.event === "media" &&
+      openai.readyState === WebSocket.OPEN
+    ) {
       openai.send(JSON.stringify({
         type: "input_audio_buffer.append",
         audio: data.media.payload
@@ -120,20 +119,14 @@ app.get("/media-stream", { websocket: true }, (socket, request) => {
     }
   });
 
-  socket.on("error", (err) => {
-    console.error("TWILIO WS ERROR:", err.message);
-  });
-
   socket.on("close", () => {
     console.log("TWILIO WEBSOCKET CLOSED");
-
-    if (
-      openai.readyState === WebSocket.OPEN ||
-      openai.readyState === WebSocket.CONNECTING
-    ) {
-      openai.close();
-    }
+    if (openai.readyState < WebSocket.CLOSING) openai.close();
   });
+
+  socket.on("error", (err) =>
+    console.error("TWILIO WS ERROR:", err.message)
+  );
 });
 
 await app.listen({
